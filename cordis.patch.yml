@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-sysmon
+      name: '@local/dsh-sysmon'

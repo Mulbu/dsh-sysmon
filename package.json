@@ -1,0 +1,28 @@
+{
+  "name": "@local/dsh-sysmon",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Live CPU and memory readout for the DeepSeek Harness Web UI composer dock.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "meta": {
+    "title": "System Monitor",
+    "description": "Shows live CPU and memory usage in the composer dock row, right of the context meter."
+  }
+}

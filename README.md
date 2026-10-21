@@ -20,8 +20,9 @@ carries the shipped `tok/s`, cache-hit and context-usage figures — placed to t
   `MemAvailable` (a much better "used" signal than `os.freemem()`).
 - **Colour bands** — the meter turns amber at 65% and red at 85%.
 - **Responsive** — the pills wrap onto a second line on narrow screens; below
-  720px the per-core histogram is dropped, below 480px the pills tighten and the
-  byte pair is hidden. Nothing is ever clipped or overlapped.
+  720px the per-core histogram gives way to a single aggregate bar (so the CPU
+  pill always keeps a meter), below 480px the pills tighten and the byte pair is
+  hidden. Nothing is ever clipped or overlapped.
 - **Locale-aware** — Chinese and English dictionaries; follows the active UI
   locale and re-renders on switch.
 - **Cheap** — one cached, single-flight, same-origin JSON route polled every 2s;

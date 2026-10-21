@@ -14,15 +14,15 @@ carries the shipped `tok/s`, cache-hit and context-usage figures — placed to t
 
 ## Features
 
-- **CPU** — aggregate utilisation plus one tiny bar per logical core, so a single
-  busy core is visible even when the average looks calm.
+- **CPU** — aggregate utilisation plus **one horizontal track per logical core**,
+  stacked top to bottom, so a single busy core is visible even when the average
+  looks calm. Hover a track for that core's exact percentage.
 - **Memory** — percentage used plus `used/total` in GiB, from `/proc/meminfo`
   `MemAvailable` (a much better "used" signal than `os.freemem()`).
-- **Colour bands** — the meter turns amber at 65% and red at 85%.
-- **Responsive** — the pills wrap onto a second line on narrow screens; below
-  720px the per-core histogram gives way to a single aggregate bar (so the CPU
-  pill always keeps a meter), below 480px the pills tighten and the byte pair is
-  hidden. Nothing is ever clipped or overlapped.
+- **Colour bands** — every track turns amber at 65% and red at 85%.
+- **Responsive** — the pills wrap onto a second line on narrow screens, and the
+  per-core tracks stay visible at every width (below 480px the pills tighten and
+  the byte pair is hidden). Nothing is ever clipped or overlapped.
 - **Locale-aware** — Chinese and English dictionaries; follows the active UI
   locale and re-renders on switch.
 - **Cheap** — one cached, single-flight, same-origin JSON route polled every 2s;
@@ -121,9 +121,13 @@ Two layout details are load-bearing:
   `order: 1` on its own element, which lifts it past the meter (default
   `order: 0`). The outlet wrapper is `display: contents`, so the element is a
   direct flex item of the dock row and `order` applies.
-- The shipped dock row is `display: flex` with **no** `flex-wrap`, so the only
-  place a line break can happen on a phone is inside this element. Hence
-  `flex-wrap: wrap` on the root plus the two narrow-viewport media queries.
+- The shipped dock row is `display: flex` with **no** `flex-wrap`, so a row that
+  is too wide *shrinks* its items instead of breaking the line. Marking the row
+  itself is the only real fix: a mount effect walks up to the nearest ancestor
+  that computes to a flex container (skipping the `display: contents` slot
+  wrappers) and sets `data-dsh-sysmon-row` on it, whose rule turns on
+  `flex-wrap`. The attribute is removed on unmount, so the row returns to its
+  shipped behaviour when the plugin unloads.
 
 ## Files
 

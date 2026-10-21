@@ -83,34 +83,25 @@ window.__ModuleLoader__.load({
       '[data-dsh-sysmon] .dsh-sysmon-detail{color:var(--dsw-alias-label-tertiary);opacity:.85}',
       '[data-dsh-sysmon] .dsh-sysmon-meter{position:relative;display:block;flex:none;',
       'width:28px;height:4px;border-radius:999px;background:var(--dsw-alias-border-l1);overflow:hidden}',
-      '[data-dsh-sysmon] .dsh-sysmon-cores{display:flex;flex:none;align-items:flex-end;gap:2px;height:10px}',
-      // The CPU pill carries BOTH meters: the per-core histogram when there is
-      // room, and a single aggregate bar that takes over when the histogram is
-      // dropped on narrow viewports. Without it the CPU pill would be the only
-      // one with no meter at all below 720px — memory keeps its own
-      // `.dsh-sysmon-meter` — which reads as "the CPU pill is broken" instead of
-      // "the per-core detail is hidden".
-      '[data-dsh-sysmon] .dsh-sysmon-aggregate{display:none}',
-      '[data-dsh-sysmon] .dsh-sysmon-core{position:relative;display:block;flex:none;width:4px;height:100%;',
-      'border-radius:1px;background:var(--dsw-alias-border-l1);overflow:hidden}',
-      // Per-core bars grow upward from the baseline. `top:auto` is load-bearing,
-      // not cosmetic: the shared `.dsh-sysmon-fill` rule below pins `top:0`, and
-      // an absolutely positioned box that specifies `top`, `bottom` AND `height`
-      // resolves against `top` — which made every bar fill top-down (inverted).
-      '[data-dsh-sysmon] .dsh-sysmon-core .dsh-sysmon-fill{position:absolute;top:auto;bottom:0;',
-      'left:0;right:0;border-radius:0;',
-      'background:var(--dsw-alias-state-success-primary);transition:height .4s ease}',
+      // One horizontal track per logical core, stacked top to bottom, so every
+      // core's own load is readable at a glance instead of only the average.
+      // `flex-direction:column` + `flex-wrap:wrap` + a `max-height` is a
+      // deliberate combination: a machine with more cores than fit in the
+      // height budget wraps into a second column instead of growing the row and
+      // pushing the pills out of the dock.
+      '[data-dsh-sysmon] .dsh-sysmon-cores{display:flex;flex-direction:column;flex-wrap:wrap;',
+      'flex:none;align-content:center;gap:2px;max-height:14px}',
+      '[data-dsh-sysmon] .dsh-sysmon-core{position:relative;display:block;flex:none;width:28px;height:3px;',
+      'border-radius:999px;background:var(--dsw-alias-border-l1);overflow:hidden}',
       '[data-dsh-sysmon] .dsh-sysmon-fill{position:absolute;top:0;bottom:0;left:0;border-radius:999px;',
       'background:var(--dsw-alias-state-success-primary);transition:width .4s ease}',
       '[data-dsh-sysmon] .dsh-sysmon-fill[data-level=warn]{background:var(--dsw-alias-state-warn-primary)}',
       '[data-dsh-sysmon] .dsh-sysmon-fill[data-level=hot]{background:var(--dsw-alias-state-error-primary)}',
       '[data-dsh-sysmon][data-state=stale] .dsh-sysmon-value,',
       '[data-dsh-sysmon][data-state=error] .dsh-sysmon-value{opacity:.55}',
-      // Narrow viewports: swap the per-core histogram for the aggregate bar (it
-      // is the widest decoration and the aggregate % still carries the meaning),
-      // then tighten the pills so both metrics keep their own line if they must.
-      '@media (max-width:720px){[data-dsh-sysmon] .dsh-sysmon-cores{display:none}',
-      '[data-dsh-sysmon] .dsh-sysmon-aggregate{display:block}}',
+      // Narrow viewports only tighten the pills. The per-core bars are the whole
+      // point of the CPU pill, so they stay visible at every width — a phone
+      // gets the same two horizontal tracks, just on a shorter track.
       '@media (max-width:480px){',
       '[data-dsh-sysmon]{gap:8px}',
       '[data-dsh-sysmon] .dsh-sysmon-pill{padding:1px 4px}',
@@ -193,18 +184,18 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One CPU pill whose meter is split into one bar per logical core, so a busy
-     * core is visible even when the aggregate average looks calm. Cores are
-     * rendered in `os.cpus()` order, left to right, and a core without a usable
-     * sample keeps its slot (dimmed, `--`) instead of shifting its neighbours.
+     * One CPU pill whose meter is split into one HORIZONTAL track per logical
+     * core, stacked top to bottom in `os.cpus()` order, so a busy core is
+     * visible even when the aggregate average looks calm. A core without a
+     * usable sample keeps its track (dimmed, `--`) instead of shifting its
+     * neighbours.
      *
-     * A second, aggregate meter rides along hidden; the narrow-viewport media
-     * query shows it and hides the histogram, so the pill always has a meter
-     * whichever layout is active.
+     * The tracks are always visible, at every width: they are the reason this
+     * pill exists, and hiding them on a phone (as an earlier revision did) left
+     * the CPU pill with no meter at all next to a memory pill that had one.
      */
     function CpuCoresPill(props) {
       const cores = props.cores;
-      const percent = Number.isFinite(props.percent) ? props.percent : 0;
       return h(
         'span',
         { className: 'dsh-sysmon-pill' },
@@ -224,20 +215,11 @@ window.__ModuleLoader__.load({
                 className: 'dsh-sysmon-fill',
                 'data-level': levelOf(percent),
                 style: {
-                  height: `${Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0))}%`,
+                  width: `${Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0))}%`,
                 },
               }),
             ),
           ),
-        ),
-        h(
-          'span',
-          { className: 'dsh-sysmon-meter dsh-sysmon-aggregate', 'aria-hidden': 'true' },
-          h('span', {
-            className: 'dsh-sysmon-fill',
-            'data-level': levelOf(props.percent),
-            style: { width: `${Math.max(0, Math.min(100, percent))}%` },
-          }),
         ),
         h('span', { className: 'dsh-sysmon-value' }, props.value),
       );
@@ -418,7 +400,6 @@ window.__ModuleLoader__.load({
         h(CpuCoresPill, {
           label: t('label.cpu'),
           cores: corePercents,
-          percent: cpuPercent,
           value: formatPercent(cpuPercent),
           coreLabel: t('label.core'),
         }),

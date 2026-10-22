@@ -83,15 +83,21 @@ window.__ModuleLoader__.load({
       '[data-dsh-sysmon] .dsh-sysmon-detail{color:var(--dsw-alias-label-tertiary);opacity:.85}',
       '[data-dsh-sysmon] .dsh-sysmon-meter{position:relative;display:block;flex:none;',
       'width:28px;height:4px;border-radius:999px;background:var(--dsw-alias-border-l1);overflow:hidden}',
-      // One horizontal track per logical core, stacked top to bottom, so every
-      // core's own load is readable at a glance instead of only the average.
-      // `flex-direction:column` + `flex-wrap:wrap` + a `max-height` is a
-      // deliberate combination: a machine with more cores than fit in the
-      // height budget wraps into a second column instead of growing the row and
-      // pushing the pills out of the dock.
-      '[data-dsh-sysmon] .dsh-sysmon-cores{display:flex;flex-direction:column;flex-wrap:wrap;',
-      'flex:none;align-content:center;gap:2px;max-height:14px}',
-      '[data-dsh-sysmon] .dsh-sysmon-core{position:relative;display:block;flex:none;width:28px;height:3px;',
+      // The per-core meter is a GRID, not a wrapped flex column: one ROW per
+      // physical core and one COLUMN per hardware thread. On a 2-core/4-thread
+      // box that is a 2x2 grid — left column the two primary threads, right
+      // column their SMT siblings — which is the shape that makes an overloaded
+      // core readable (both of its threads sit on the same row).
+      //
+      // `grid-auto-flow:column` fills top-to-bottom then left-to-right, and the
+      // host emits logical CPUs grouped per core in thread order, so the fill
+      // order lands exactly on that layout. The row count is set inline from the
+      // resolved topology (`grid-template-rows`), because it is what decides how
+      // many rows fit before the flow moves to the next column; without it every
+      // track would stack into one tall column.
+      '[data-dsh-sysmon] .dsh-sysmon-cores{display:grid;grid-auto-flow:column;flex:none;',
+      'grid-auto-columns:28px;gap:2px}',
+      '[data-dsh-sysmon] .dsh-sysmon-core{position:relative;display:block;width:28px;height:3px;',
       'border-radius:999px;background:var(--dsw-alias-border-l1);overflow:hidden}',
       '[data-dsh-sysmon] .dsh-sysmon-fill{position:absolute;top:0;bottom:0;left:0;border-radius:999px;',
       'background:var(--dsw-alias-state-success-primary);transition:width .4s ease}',
@@ -184,11 +190,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One CPU pill whose meter is split into one HORIZONTAL track per logical
-     * core, stacked top to bottom in `os.cpus()` order, so a busy core is
-     * visible even when the aggregate average looks calm. A core without a
-     * usable sample keeps its track (dimmed, `--`) instead of shifting its
-     * neighbours.
+     * One CPU pill whose meter is a grid of HORIZONTAL tracks: one ROW per
+     * physical core, one COLUMN per hardware thread. On a 2-core/4-thread box
+     * that draws 2x2 — left column the two primary threads, right column their
+     * SMT siblings — so both threads of an overloaded core share a row.
+     *
+     * `props.topology` is the host's resolved layout; when it is absent (a
+     * platform without sysfs topology) every logical CPU becomes its own row in
+     * a single column, which is the old behaviour and still correct, just
+     * without the core/thread grouping.
      *
      * The tracks are always visible, at every width: they are the reason this
      * pill exists, and hiding them on a phone (as an earlier revision did) left
@@ -196,20 +206,47 @@ window.__ModuleLoader__.load({
      */
     function CpuCoresPill(props) {
       const cores = props.cores;
+      const topology = Array.isArray(props.topology) ? props.topology : undefined;
+
+      // Rows = PHYSICAL CORES, columns = hardware threads. That is the whole
+      // point of the grid: a 2-core/4-thread box draws 2 rows x 2 columns, so
+      // both threads of one core share a row and an overloaded core is obvious.
+      // (Getting this backwards gives one row per THREAD — on a 2-core/2-thread
+      // box that collapses to a single row of two columns, which reads as "the
+      // physical cores are side by side".)
+      //
+      // Without topology every logical CPU is its own row in a single column,
+      // which is the honest fallback: nothing claims to know the SMT pairing.
+      const rowCount = topology === undefined
+        ? Math.max(1, cores.length)
+        : Math.max(1, topology.reduce((max, entry) => Math.max(max, entry.core + 1), 0));
+      // `grid-template-rows` has to name every row explicitly: with
+      // `grid-auto-flow:column` an unnamed implicit row would be appended to the
+      // single column instead of starting a new one.
+      const rows = `repeat(${rowCount}, 3px)`;
+
       return h(
         'span',
         { className: 'dsh-sysmon-pill' },
         h('span', { className: 'dsh-sysmon-label' }, props.label),
         h(
           'span',
-          { className: 'dsh-sysmon-cores', 'aria-hidden': 'true' },
-          cores.map((percent, index) =>
-            h(
+          {
+            className: 'dsh-sysmon-cores',
+            'aria-hidden': 'true',
+            style: { gridTemplateRows: rows },
+          },
+          cores.map((percent, index) => {
+            const slot = topology === undefined ? undefined : topology[index];
+            const title = slot === undefined
+              ? `${props.coreLabel} ${index + 1}: ${formatPercent(percent)}`
+              : `${props.coreLabel} ${slot.core + 1}·${slot.thread + 1}: ${formatPercent(percent)}`;
+            return h(
               'span',
               {
                 key: index,
                 className: 'dsh-sysmon-core',
-                title: `${props.coreLabel} ${index + 1}: ${formatPercent(percent)}`,
+                title,
               },
               h('span', {
                 className: 'dsh-sysmon-fill',
@@ -218,8 +255,8 @@ window.__ModuleLoader__.load({
                   width: `${Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0))}%`,
                 },
               }),
-            ),
-          ),
+            );
+          }),
         ),
         h('span', { className: 'dsh-sysmon-value' }, props.value),
       );
@@ -361,6 +398,7 @@ window.__ModuleLoader__.load({
       const data = snapshot.data;
       const cpuPercent = Number.isFinite(data?.cpuPercent) ? data.cpuPercent : undefined;
       const cpuCores = Array.isArray(data?.cpuCores) ? data.cpuCores : undefined;
+      const cpuTopology = Array.isArray(data?.cpuTopology) ? data.cpuTopology : undefined;
       const memoryPercent = Number.isFinite(data?.memory?.percent) ? data.memory.percent : undefined;
       const load = Array.isArray(data?.loadAverage) ? data.loadAverage : undefined;
 
@@ -400,6 +438,7 @@ window.__ModuleLoader__.load({
         h(CpuCoresPill, {
           label: t('label.cpu'),
           cores: corePercents,
+          topology: cpuTopology,
           value: formatPercent(cpuPercent),
           coreLabel: t('label.core'),
         }),

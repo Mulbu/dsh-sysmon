@@ -12,7 +12,7 @@
  */
 
 import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 
 const ROUTE_PREFIX = '/dsh-sysmon/api';
 /** Reuse one sample for this long so overlapping requests cannot skew the delta. */
@@ -26,6 +26,75 @@ let cached;
 let cachedAt = 0;
 /** Single-flight guard for concurrent requests. */
 let inflight;
+/**
+ * Which logical CPU is which hardware thread, resolved once at startup.
+ * @type {{ logical: number, core: number, thread: number }[] | undefined}
+ */
+let topology;
+
+/**
+ * Resolve the SMT layout so the client can draw one COLUMN per hardware thread
+ * and one ROW per physical core: on a 2-core/4-thread box that is two columns
+ * (primary threads, then siblings) of two rows each.
+ *
+ * Linux exposes the answer directly in sysfs (`core_id` + `physical_package_id`
+ * per logical CPU). Everywhere else — macOS, Windows, containers without the
+ * sysfs topology — there is no portable equivalent, so this returns undefined
+ * and the client falls back to one track per logical CPU in a single column.
+ *
+ * @returns {Promise<{ logical: number, core: number, thread: number }[] | undefined>}
+ *   one entry per logical CPU, ordered THREAD-major (all thread 0 rows, then all
+ *   thread 1 rows, …) so a column-major CSS grid lays it out one column per
+ *   thread; undefined when the platform does not expose the topology.
+ */
+async function readTopology() {
+  try {
+    const names = await readdir('/sys/devices/system/cpu');
+    const present = names
+      .map((name) => /^cpu(\d+)$/.exec(name))
+      .filter((match) => match !== null)
+      .map((match) => Number(match[1]))
+      .sort((a, b) => a - b);
+    if (present.length === 0) return undefined;
+
+    // Group logical CPUs by (package, core). Each group lists the logical CPUs
+    // that share one physical core: index 0 is the primary thread, index 1+ are
+    // its SMT siblings.
+    const groups = [];
+    const byKey = new Map();
+    for (const logical of present) {
+      const base = `/sys/devices/system/cpu/cpu${logical}/topology`;
+      const [coreId, packageId] = await Promise.all([
+        readFile(`${base}/core_id`, 'utf8'),
+        readFile(`${base}/physical_package_id`, 'utf8'),
+      ]);
+      const key = `${packageId.trim()}:${coreId.trim()}`;
+      let index = byKey.get(key);
+      if (index === undefined) {
+        index = groups.length;
+        byKey.set(key, index);
+        groups.push([]);
+      }
+      groups[index].push(logical);
+    }
+
+    // Reorder thread-major: every core's thread 0, then every core's thread 1,
+    // and so on. A core with fewer threads than the widest one simply has no
+    // row in the later columns, which is exactly the grid the client wants.
+    const width = groups.reduce((max, members) => Math.max(max, members.length), 0);
+    const rows = [];
+    for (let thread = 0; thread < width; thread += 1) {
+      groups.forEach((members, core) => {
+        const logical = members[thread];
+        if (logical === undefined) return;
+        rows.push({ logical, core, thread });
+      });
+    }
+    return rows;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Per-core busy/idle tick counters, one entry per logical CPU, in `os.cpus()`
@@ -122,9 +191,25 @@ function round(value) {
   return Number(value.toFixed(1));
 }
 
+/**
+ * Topology, resolved lazily on first use and then memoized. Doing it here rather
+ * than only in `apply` matters because the host half is loaded once per process:
+ * a hot-reloaded or long-running module keeps its module state, and a plugin
+ * installed before this feature existed would otherwise never report a layout.
+ * @returns {Promise<{ logical: number, core: number, thread: number }[] | null>}
+ */
+async function topologyOnce() {
+  if (topology === undefined) topology = await readTopology();
+  return topology ?? null;
+}
+
 /** Build the payload the Client half polls. */
 async function collect() {
-  const [cpu, memory] = await Promise.all([Promise.resolve().then(sampleCpu), readMemory()]);
+  const [cpu, memory, layout] = await Promise.all([
+    Promise.resolve().then(sampleCpu),
+    readMemory(),
+    topologyOnce(),
+  ]);
 
   const used = Math.max(0, memory.total - memory.available);
   const swapUsed = Math.max(0, memory.swapTotal - memory.swapFree);
@@ -132,6 +217,10 @@ async function collect() {
   return {
     cpuPercent: cpu.percent === undefined ? null : cpu.percent,
     cpuCores: cpu.cores ?? null,
+    // Thread layout when it is known, so the client can put one column per
+    // hardware thread and one row per physical core. Null means "unknown on
+    // this platform" and the client falls back to a single column.
+    cpuTopology: layout,
     cpuCount: cpus().length,
     loadAverage: loadavg().map(round),
     memory: {
@@ -237,6 +326,10 @@ export function apply(ctx) {
   } catch {
     previousTicks = undefined;
   }
+
+  // Warm the topology cache in the background so the first poll already has it;
+  // `collect()` resolves it on demand anyway, so a failure here is harmless.
+  void topologyOnce();
 
   if (typeof ctx.inject !== 'function') return;
 

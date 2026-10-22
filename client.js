@@ -80,7 +80,6 @@ window.__ModuleLoader__.load({
       'align-items:center;gap:6px;padding:1px 8px;border-radius:999px}',
       '[data-dsh-sysmon] .dsh-sysmon-label{color:inherit}',
       '[data-dsh-sysmon] .dsh-sysmon-value{color:var(--dsw-alias-label-secondary);font-weight:500}',
-      '[data-dsh-sysmon] .dsh-sysmon-detail{color:var(--dsw-alias-label-tertiary);opacity:.85}',
       '[data-dsh-sysmon] .dsh-sysmon-meter{position:relative;display:block;flex:none;',
       'width:28px;height:4px;border-radius:999px;background:var(--dsw-alias-border-l1);overflow:hidden}',
       // The per-core meter is a GRID, not a wrapped flex column: one ROW per
@@ -111,8 +110,7 @@ window.__ModuleLoader__.load({
       '@media (max-width:480px){',
       '[data-dsh-sysmon]{gap:8px}',
       '[data-dsh-sysmon] .dsh-sysmon-pill{padding:1px 4px}',
-      '[data-dsh-sysmon] .dsh-sysmon-meter{width:20px}',
-      '[data-dsh-sysmon] .dsh-sysmon-detail{display:none}}',
+      '[data-dsh-sysmon] .dsh-sysmon-meter{width:20px}}',
       '@media (prefers-reduced-motion:reduce){[data-dsh-sysmon] .dsh-sysmon-fill{transition:none}}',
     ].join('');
 
@@ -150,13 +148,6 @@ window.__ModuleLoader__.load({
       return 'ok';
     }
 
-    /** Compact `2.7/3.7 GiB` pair, so the pill stays narrow next to the stats pills. */
-    function formatPair(used, total) {
-      if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return undefined;
-      if (total >= GIB) return `${(used / GIB).toFixed(1)}/${(total / GIB).toFixed(1)} GiB`;
-      return `${Math.round(used / (1024 * 1024))}/${Math.round(total / (1024 * 1024))} MiB`;
-    }
-
     /** Compact uptime such as `2d 21h` or `4h 12m`. */
     function formatUptime(seconds) {
       if (!Number.isFinite(seconds) || seconds < 0) return '';
@@ -185,7 +176,6 @@ window.__ModuleLoader__.load({
           }),
         ),
         h('span', { className: 'dsh-sysmon-value' }, props.value),
-        props.detail === undefined ? null : h('span', { className: 'dsh-sysmon-detail' }, props.detail),
       );
     }
 
@@ -446,7 +436,6 @@ window.__ModuleLoader__.load({
           label: t('label.memory'),
           percent: memoryPercent,
           value: formatPercent(memoryPercent),
-          detail: data === undefined ? undefined : formatPair(data.memory?.used, data.memory?.total),
         }),
       );
     }

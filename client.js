@@ -27,9 +27,13 @@ window.__ModuleLoader__.load({
       'label.core': '核心',
       'label.cores': '核心',
       'label.memory': '内存',
+      'label.disk': '硬盘',
       'label.load': '负载',
+      'label.temperature': '温度',
       'label.unavailable': '不可用',
       'tooltip.cores': '核心',
+      'tooltip.disk': '硬盘',
+      'tooltip.sensor': '传感器',
       'tooltip.swap': '交换分区',
       'tooltip.uptime': '运行时长',
     };
@@ -40,9 +44,13 @@ window.__ModuleLoader__.load({
       'label.core': 'Core',
       'label.cores': 'Cores',
       'label.memory': 'MEM',
+      'label.disk': 'DISK',
       'label.load': 'LOAD',
+      'label.temperature': 'TEMP',
       'label.unavailable': 'unavailable',
       'tooltip.cores': 'cores',
+      'tooltip.disk': 'disk',
+      'tooltip.sensor': 'sensor',
       'tooltip.swap': 'swap',
       'tooltip.uptime': 'uptime',
     };
@@ -80,8 +88,14 @@ window.__ModuleLoader__.load({
       'align-items:center;gap:6px;padding:1px 8px;border-radius:999px}',
       '[data-dsh-sysmon] .dsh-sysmon-label{color:inherit}',
       '[data-dsh-sysmon] .dsh-sysmon-value{color:var(--dsw-alias-label-secondary);font-weight:500}',
+      // Shared bar metrics. One LENGTH and one THICKNESS for every horizontal
+      // bar — the memory and disk meters and every per-core track — so the whole
+      // row reads as one family: same length, same 4px thickness. (The two used
+      // to differ while the core tracks were hairlines; they no longer do.)
+      '[data-dsh-sysmon]{--dsh-sysmon-bar-w:28px;--dsh-sysmon-bar-h:4px}',
       '[data-dsh-sysmon] .dsh-sysmon-meter{position:relative;display:block;flex:none;',
-      'width:28px;height:4px;border-radius:999px;background:var(--dsw-alias-border-l1);overflow:hidden}',
+      'width:var(--dsh-sysmon-bar-w);height:var(--dsh-sysmon-bar-h);border-radius:999px;',
+      'background:var(--dsw-alias-border-l1);overflow:hidden}',
       // The per-core meter is a GRID, not a wrapped flex column: one ROW per
       // physical core and one COLUMN per hardware thread. On a 2-core/4-thread
       // box that is a 2x2 grid — left column the two primary threads, right
@@ -93,24 +107,62 @@ window.__ModuleLoader__.load({
       // order lands exactly on that layout. The row count is set inline from the
       // resolved topology (`grid-template-rows`), because it is what decides how
       // many rows fit before the flow moves to the next column; without it every
-      // track would stack into one tall column.
+      // track would stack into one tall column. The row height is the shared
+      // bar-height variable, so a core track matches the meters.
       '[data-dsh-sysmon] .dsh-sysmon-cores{display:grid;grid-auto-flow:column;flex:none;',
-      'grid-auto-columns:28px;gap:2px}',
-      '[data-dsh-sysmon] .dsh-sysmon-core{position:relative;display:block;width:28px;height:3px;',
+      'grid-auto-columns:var(--dsh-sysmon-bar-w);gap:2px}',
+      '[data-dsh-sysmon] .dsh-sysmon-core{position:relative;display:block;',
+      'width:var(--dsh-sysmon-bar-w);height:var(--dsh-sysmon-bar-h);',
       'border-radius:999px;background:var(--dsw-alias-border-l1);overflow:hidden}',
       '[data-dsh-sysmon] .dsh-sysmon-fill{position:absolute;top:0;bottom:0;left:0;border-radius:999px;',
       'background:var(--dsw-alias-state-success-primary);transition:width .4s ease}',
       '[data-dsh-sysmon] .dsh-sysmon-fill[data-level=warn]{background:var(--dsw-alias-state-warn-primary)}',
       '[data-dsh-sysmon] .dsh-sysmon-fill[data-level=hot]{background:var(--dsw-alias-state-error-primary)}',
+      // The CPU pill is a single 3-column grid row: label | core tracks |
+      // (ring + percentage).
+      //
+      // The ring and the percentage share the THIRD cell, whose content is a
+      // flex row with the ring first — that is what puts the ring immediately to
+      // the LEFT of the number while adding no grid column, so this pill keeps
+      // the width it had before the ring existed. Sharing a flex row also makes
+      // the ring and the digits centre on exactly the same line.
+      '[data-dsh-sysmon] .dsh-sysmon-cpu{display:inline-grid;',
+      'grid-template-columns:auto auto auto;align-items:center;column-gap:6px}',
+      '[data-dsh-sysmon] .dsh-sysmon-cpu>.dsh-sysmon-label{grid-column:1}',
+      '[data-dsh-sysmon] .dsh-sysmon-cpu>.dsh-sysmon-cores{grid-column:2}',
+      '[data-dsh-sysmon] .dsh-sysmon-cpu>.dsh-sysmon-reading{grid-column:3;',
+      'display:inline-flex;align-items:center;gap:4px}',
+      // The temperature gauge is a RING, not a bar: a small ring is the one
+      // shape that fits beside the percentage without widening the pill much,
+      // and its arc length carries the reading (see the SVG dash geometry in
+      // the component). Colour follows the same temperature bands as before.
+      '[data-dsh-sysmon] .dsh-sysmon-temp{position:relative;display:block;flex:none;',
+      'width:12px;height:12px;align-self:center;line-height:0}',
+      // `display:block` on the SVG is load-bearing, not cosmetic: an inline SVG
+      // sits on the text baseline, which pushed the ring 2px below the vertical
+      // centre of the label/percentage beside it (the wrapper centred correctly;
+      // the SVG inside it did not). Block layout makes the ring fill the 12px
+      // box exactly, so its centre matches the row's centre.
+      '[data-dsh-sysmon] .dsh-sysmon-temp svg{display:block}',
+      '[data-dsh-sysmon] .dsh-sysmon-temp-track{fill:none;',
+      'stroke:var(--dsw-alias-border-l1);stroke-width:2px}',
+      // The arc is drawn clockwise from 12 o'clock: `stroke-dasharray` holds the
+      // filled fraction, `dashoffset` positions its start at the top.
+      '[data-dsh-sysmon] .dsh-sysmon-temp-arc{fill:none;stroke-width:2px;',
+      'stroke-linecap:round;stroke:var(--dsw-alias-state-success-primary);',
+      'transition:stroke-dasharray .4s ease}',
+      // Temperature bands: 0–40 °C green, ~40–70 °C orange, above 70 °C red.
+      '[data-dsh-sysmon] .dsh-sysmon-temp-arc[data-level=warn]{stroke:var(--dsw-alias-state-warn-primary)}',
+      '[data-dsh-sysmon] .dsh-sysmon-temp-arc[data-level=hot]{stroke:var(--dsw-alias-state-error-primary)}',
       '[data-dsh-sysmon][data-state=stale] .dsh-sysmon-value,',
       '[data-dsh-sysmon][data-state=error] .dsh-sysmon-value{opacity:.55}',
-      // Narrow viewports only tighten the pills. The per-core bars are the whole
-      // point of the CPU pill, so they stay visible at every width — a phone
-      // gets the same two horizontal tracks, just on a shorter track.
+      // Narrow viewports only tighten the pills. Bar LENGTH shrinks through the
+      // SHARED variable, so the memory meter and every core track shrink by the
+      // same amount and stay identical; the thickness is the same 2px on every
+      // viewport, and the per-core tracks are never hidden.
       '@media (max-width:480px){',
-      '[data-dsh-sysmon]{gap:8px}',
-      '[data-dsh-sysmon] .dsh-sysmon-pill{padding:1px 4px}',
-      '[data-dsh-sysmon] .dsh-sysmon-meter{width:20px}}',
+      '[data-dsh-sysmon]{gap:8px;--dsh-sysmon-bar-w:20px}',
+      '[data-dsh-sysmon] .dsh-sysmon-pill{padding:1px 4px}}',
       '@media (prefers-reduced-motion:reduce){[data-dsh-sysmon] .dsh-sysmon-fill{transition:none}}',
     ].join('');
 
@@ -146,6 +198,53 @@ window.__ModuleLoader__.load({
       if (value >= 85) return 'hot';
       if (value >= 65) return 'warn';
       return 'ok';
+    }
+
+    /**
+     * Temperature scale of the CPU ring, in °C. The ring spans 0–100 °C so its
+     * arc length carries the same meaning as the colour bands: a 40 °C chip
+     * draws 40% of the ring and reads green, 70 °C draws 70% and reads red.
+     */
+    const TEMP_MIN_C = 0;
+    const TEMP_MAX_C = 100;
+    /** SVG circle circumference for the ring: r=5 in the 12px viewBox. */
+    const ARC_RADIUS = 5;
+    const ARC_CIRCUMFERENCE = 2 * Math.PI * ARC_RADIUS;
+    /**
+     * Upper bound (exclusive) of the GREEN band. User-specified bands are
+     * 0–40 green, 50–70 orange, above 70 red; the gap at 40–50 is attributed to
+     * orange, so a chip that is already above idle-but-safe warm reads warm
+     * instead of falsely green.
+     */
+    const TEMP_GREEN_MAX_C = 40;
+    /** Upper bound (inclusive) of the ORANGE band; above it the bar is red. */
+    const TEMP_ORANGE_MAX_C = 70;
+
+    /** Bar fraction for a Celsius reading, clamped to the scale above. */
+    function temperatureFraction(celsius) {
+      if (!Number.isFinite(celsius)) return 0;
+      const span = TEMP_MAX_C - TEMP_MIN_C;
+      const fraction = (celsius - TEMP_MIN_C) / span;
+      return Math.min(1, Math.max(0, fraction));
+    }
+
+    /**
+     * Colour band of a temperature reading: `ok` (green) up to 40 °C, `warn`
+     * (orange) through 70 °C, `hot` (red) above it. Expressed as the same
+     * `data-level` vocabulary the occupancy meters use, so the existing
+     * `.dsh-sysmon-fill[data-level=…]` colour rules apply to the temperature
+     * fill unchanged.
+     */
+    function temperatureLevel(celsius) {
+      if (!Number.isFinite(celsius)) return 'ok';
+      if (celsius > TEMP_ORANGE_MAX_C) return 'hot';
+      if (celsius >= TEMP_GREEN_MAX_C) return 'warn';
+      return 'ok';
+    }
+
+    /** Compact reading such as `51°`; the unit is in the label and tooltip. */
+    function formatCelsius(celsius) {
+      return Number.isFinite(celsius) ? `${Math.round(celsius)}°` : '--';
     }
 
     /** Compact uptime such as `2d 21h` or `4h 12m`. */
@@ -212,12 +311,14 @@ window.__ModuleLoader__.load({
         : Math.max(1, topology.reduce((max, entry) => Math.max(max, entry.core + 1), 0));
       // `grid-template-rows` has to name every row explicitly: with
       // `grid-auto-flow:column` an unnamed implicit row would be appended to the
-      // single column instead of starting a new one.
-      const rows = `repeat(${rowCount}, 3px)`;
+      // single column instead of starting a new one. The row height is the shared
+      // TRACK-height variable (not a literal), so every core track stays exactly
+      // as thick as its neighbours.
+      const rows = `repeat(${rowCount}, var(--dsh-sysmon-bar-h))`;
 
       return h(
         'span',
-        { className: 'dsh-sysmon-pill' },
+        { className: 'dsh-sysmon-pill dsh-sysmon-cpu' },
         h('span', { className: 'dsh-sysmon-label' }, props.label),
         h(
           'span',
@@ -248,7 +349,42 @@ window.__ModuleLoader__.load({
             );
           }),
         ),
-        h('span', { className: 'dsh-sysmon-value' }, props.value),
+        // The ring and the percentage share one cell: the ring comes first, so
+        // it renders immediately to the LEFT of the number. Sharing the cell adds
+        // no grid column (the pill keeps its previous width) and lets one flex
+        // row centre the ring and the digits on the same line.
+        h(
+          'span',
+          { className: 'dsh-sysmon-reading' },
+          Number.isFinite(props.temperature)
+            ? h(
+                'span',
+                {
+                  className: 'dsh-sysmon-temp',
+                  title: `${props.tempLabel}: ${formatCelsius(props.temperature)}`,
+                },
+                // 12px box with a 2px stroke, so the arc's centre radius is 5px.
+                h(
+                  'svg',
+                  { viewBox: '0 0 12 12', width: 12, height: 12, 'aria-hidden': 'true' },
+                  h('circle', { className: 'dsh-sysmon-temp-track', cx: 6, cy: 6, r: 5 }),
+                  h('circle', {
+                    className: 'dsh-sysmon-temp-arc',
+                    'data-level': temperatureLevel(props.temperature),
+                    cx: 6,
+                    cy: 6,
+                    r: 5,
+                    // Clockwise from 12 o'clock: `stroke-dasharray` is
+                    // [filled, rest] in path units, and rotate(-90) moves the
+                    // start of the dash to the top of the ring.
+                    strokeDasharray: `${(temperatureFraction(props.temperature) * ARC_CIRCUMFERENCE).toFixed(2)} ${ARC_CIRCUMFERENCE.toFixed(2)}`,
+                    transform: 'rotate(-90 6 6)',
+                  }),
+                ),
+              )
+            : null,
+          h('span', { className: 'dsh-sysmon-value' }, props.value),
+        ),
       );
     }
 
@@ -390,6 +526,13 @@ window.__ModuleLoader__.load({
       const cpuCores = Array.isArray(data?.cpuCores) ? data.cpuCores : undefined;
       const cpuTopology = Array.isArray(data?.cpuTopology) ? data.cpuTopology : undefined;
       const memoryPercent = Number.isFinite(data?.memory?.percent) ? data.memory.percent : undefined;
+      const diskPercent = Number.isFinite(data?.disk?.percent) ? data.disk.percent : undefined;
+      const temperature = Number.isFinite(data?.temperature?.celsius)
+        ? data.temperature.celsius
+        : undefined;
+      const temperatureSensor = typeof data?.temperature?.label === 'string'
+        ? data.temperature.label
+        : undefined;
       const load = Array.isArray(data?.loadAverage) ? data.loadAverage : undefined;
 
       // One bar per logical core. A payload from an older host half carries no
@@ -408,7 +551,13 @@ window.__ModuleLoader__.load({
               ? null
               : `${t('label.cores')} ${corePercents.map((value) => formatPercent(value)).join(' ')}`,
             `${t('label.load')} ${(load ?? []).map((value) => Number(value).toFixed(2)).join(' ')}`,
+            Number.isFinite(temperature)
+              ? `${t('label.temperature')} ${formatCelsius(temperature)}${temperatureSensor === undefined ? '' : ` (${temperatureSensor})`}`
+              : null,
             `${t('label.memory')} ${formatBytes(data.memory?.used)} / ${formatBytes(data.memory?.total)} (${formatPercent(memoryPercent)})`,
+            data.disk === null || data.disk === undefined
+              ? null
+              : `${t('tooltip.disk')} ${formatBytes(data.disk.used)} / ${formatBytes(data.disk.total)} (${formatPercent(diskPercent)})`,
             `${t('tooltip.swap')} ${formatBytes(data.swap?.used)} / ${formatBytes(data.swap?.total)}`,
             `${t('tooltip.uptime')} ${formatUptime(data.uptime)}`,
           ]
@@ -431,12 +580,25 @@ window.__ModuleLoader__.load({
           topology: cpuTopology,
           value: formatPercent(cpuPercent),
           coreLabel: t('label.core'),
+          temperature,
+          tempLabel: temperatureSensor === undefined
+            ? t('label.temperature')
+            : `${t('label.temperature')} · ${temperatureSensor}`,
         }),
         h(Pill, {
           label: t('label.memory'),
           percent: memoryPercent,
           value: formatPercent(memoryPercent),
         }),
+        // Disk renders only when the host could measure it, so a platform
+        // without `statfs` shows two pills instead of a permanent `硬盘 --`.
+        data === undefined || data.disk === null || data.disk === undefined
+          ? null
+          : h(Pill, {
+              label: t('label.disk'),
+              percent: diskPercent,
+              value: formatPercent(diskPercent),
+            }),
       );
     }
 

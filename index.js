@@ -12,9 +12,15 @@
  */
 
 import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, statfs } from 'node:fs/promises';
 
 const ROUTE_PREFIX = '/dsh-sysmon/api';
+/**
+ * Filesystem whose usage the disk pill reports: the one holding the process's
+ * working directory, which is the deployment's own volume. Resolved once so a
+ * chdir elsewhere cannot silently switch the pill to a different disk.
+ */
+const DISK_PATH = process.cwd();
 /** Reuse one sample for this long so overlapping requests cannot skew the delta. */
 const CACHE_MS = 500;
 const GIB = 1024 * 1024 * 1024;
@@ -186,9 +192,123 @@ async function readMemory() {
   }
 }
 
+/**
+ * Disk usage of the filesystem that holds this deployment, reported the same
+ * way as memory: a used/total pair plus a percentage.
+ *
+ * `statfs` is used rather than shelling out to `df` because it needs no child
+ * process and is available on every platform Node runs on. `bavail` (free space
+ * for unprivileged users) is deliberately not the "free" figure here: `used` is
+ * `total - bfree` so it matches what `df` shows in the Used column.
+ *
+ * @param {string} path - a path on the filesystem to measure.
+ * @returns {Promise<{ path: string, total: number, used: number, percent: number } | null>}
+ *   null when the filesystem cannot be measured.
+ */
+async function readDisk(path) {
+  try {
+    const stats = await statfs(path);
+    const total = stats.bsize * stats.blocks;
+    if (!Number.isFinite(total) || total <= 0) return null;
+    const used = Math.max(0, total - stats.bsize * stats.bfree);
+    return {
+      path,
+      total,
+      used,
+      percent: round((used / total) * 100),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Round to one decimal place. */
 function round(value) {
   return Number(value.toFixed(1));
+}
+
+/**
+ * One hwmon temperature reading: the chip name, its label, and Celsius.
+ * @typedef {{ chip: string, label: string, celsius: number }} TemperatureReading
+ */
+
+/**
+ * Read every readable `tempN_input` under `/sys/class/hwmon`, in sysfs order.
+ *
+ * Three things make this less trivial than a glob:
+ *  1. The hwmon INDEX is not stable across boots, so chips are identified by
+ *     their `name` file (`coretemp`, `acpitz`, `k10temp`, …) and never by path.
+ *  2. Not every `tempN_input` has a `tempN_label`, and a missing label must not
+ *     drop the reading.
+ *  3. A driver can expose a sensor that is not connected: a raw value of 0, a
+ *     negative value, or one above 150 °C is not a real CPU temperature, and
+ *     reporting it would peg the bar at red for no reason.
+ *
+ * @param {string} root - `/sys/class/hwmon` in production; injectable for tests.
+ * @returns {Promise<TemperatureReading[]>} readings; empty when unavailable.
+ */
+async function readTemperatures(root = '/sys/class/hwmon') {
+  let entries;
+  try {
+    entries = await readdir(root);
+  } catch {
+    return [];
+  }
+
+  const read = async (dir, file) => {
+    try {
+      return (await readFile(`${dir}/${file}`, 'utf8')).trim();
+    } catch {
+      return undefined;
+    }
+  };
+
+  const readings = [];
+  for (const entry of entries) {
+    const dir = `${root}/${entry}`;
+    const chip = (await read(dir, 'name')) ?? entry;
+    let children;
+    try {
+      children = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const file of children) {
+      const match = /^temp(\d+)_input$/.exec(file);
+      if (match === null) continue;
+      const milli = Number(await read(dir, file));
+      // `tempN_input` is millidegrees Celsius by the hwmon ABI.
+      if (!Number.isFinite(milli) || milli <= 0) continue;
+      const celsius = milli / 1000;
+      if (celsius > 150) continue;
+      const label = (await read(dir, `temp${match[1]}_label`)) ?? '';
+      readings.push({ chip, label, celsius });
+    }
+  }
+  return readings;
+}
+
+/**
+ * Choose the CPU package temperature out of the available readings.
+ *
+ * `coretemp`/`k10temp` expose a labelled package sensor, which is exactly the
+ * die temperature a "CPU temp" bar should show. When the chip is absent (an ARM
+ * SBC, a VM) fall back to the HOTTEST reading: an overheating box must read hot
+ * even when the sensor that reported it is not the package one, and a chassis
+ * sensor reports a calm ambient that would hide the problem.
+ *
+ * @param {TemperatureReading[]} readings - all readings, in sysfs order.
+ * @returns {{ celsius: number, chip: string, label: string } | null} the pick.
+ */
+function pickCpuTemperature(readings) {
+  const packageSensor = readings.find((entry) => /package/i.test(entry.label));
+  const picked = packageSensor ?? readings.reduce(
+    (best, entry) => (best === null || entry.celsius > best.celsius ? entry : best),
+    null,
+  );
+  return picked === null
+    ? null
+    : { celsius: picked.celsius, chip: picked.chip, label: picked.label };
 }
 
 /**
@@ -205,14 +325,17 @@ async function topologyOnce() {
 
 /** Build the payload the Client half polls. */
 async function collect() {
-  const [cpu, memory, layout] = await Promise.all([
+  const [cpu, memory, layout, disk, temperatures] = await Promise.all([
     Promise.resolve().then(sampleCpu),
     readMemory(),
     topologyOnce(),
+    readDisk(DISK_PATH),
+    readTemperatures(),
   ]);
 
   const used = Math.max(0, memory.total - memory.available);
   const swapUsed = Math.max(0, memory.swapTotal - memory.swapFree);
+  const temperature = pickCpuTemperature(temperatures);
 
   return {
     cpuPercent: cpu.percent === undefined ? null : cpu.percent,
@@ -233,6 +356,17 @@ async function collect() {
       used: swapUsed,
       percent: memory.swapTotal > 0 ? round((swapUsed / memory.swapTotal) * 100) : 0,
     },
+    // The filesystem holding this deployment; null when it cannot be measured.
+    disk: disk === null ? null : disk,
+    // CPU die temperature; null when no readable sensor exists (a VM, a board
+    // without hwmon), so the client can omit the bar instead of showing `--`.
+    temperature: temperature === null
+      ? null
+      : {
+          celsius: round(temperature.celsius),
+          chip: temperature.chip,
+          label: temperature.label,
+        },
     uptime: Math.round(uptime()),
     sampledAt: Date.now(),
   };

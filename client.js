@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-sysmon',
+  id: '@mulbu/dsh-sysmon',
   factory: (require) => {
     const module = { exports: {} };
     const exports = module.exports;

@@ -45,7 +45,7 @@ Then add it to the profile's bundle list in `package.json`:
 {
   "dsh": {
     "profile": {
-      "bundles": ["...", "@local/dsh-sysmon"]
+      "bundles": ["...", "@mulbu/dsh-sysmon"]
     }
   }
 }
@@ -134,17 +134,17 @@ Two layout details are load-bearing:
 | File                | Role                                                  |
 | ------------------- | ----------------------------------------------------- |
 | `package.json`      | Bundle manifest: `dsh.bundle.patch`, `dsh.client`      |
-| `cordis.patch.yml`  | Loader row that inserts `@local/dsh-sysmon`            |
+| `cordis.patch.yml`  | Loader row that inserts `@mulbu/dsh-sysmon`            |
 | `index.js`          | Host half: the `/dsh-sysmon/api` route                 |
 | `client.js`         | Client half: locale, slot entry, pills, polling        |
 
 ## Uninstall
 
 ```text
-plugin_manager set_plugin target=@local/dsh-sysmon enabled=false
+plugin_manager set_plugin target=@mulbu/dsh-sysmon enabled=false
 ```
 
-or remove `@local/dsh-sysmon` from the profile's `dsh.profile.bundles` and
+or remove `@mulbu/dsh-sysmon` from the profile's `dsh.profile.bundles` and
 `pnpm remove` it. The route disappears with the host plugin and the pills with
 the client entry — nothing else is touched.
 
